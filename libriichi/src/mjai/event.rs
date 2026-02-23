@@ -140,8 +140,13 @@ pub struct EventExt {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metadata {
     pub q_values: Option<Vec<f32>>,
+    pub policy_logits_compact: Option<Vec<f32>>,
     pub mask_bits: Option<u64>,
     pub is_greedy: Option<bool>,
+    pub action_idx: Option<i64>,
+    pub selected_logp: Option<f32>,
+    pub selected_value: Option<f32>,
+    pub decision_head: Option<String>,
     pub batch_size: Option<usize>,
     pub eval_time_ns: Option<u64>,
     pub shanten: Option<i8>,

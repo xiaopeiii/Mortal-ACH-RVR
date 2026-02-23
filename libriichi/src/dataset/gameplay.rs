@@ -6,6 +6,7 @@ use std::array;
 use std::fs::File;
 use std::io;
 use std::mem;
+use std::path::Path;
 
 use ahash::AHashSet;
 use anyhow::{Context, Result, bail};
@@ -56,11 +57,48 @@ pub struct Gameplay {
     pub apply_gamma: Vec<bool>,
     pub at_turns: Vec<u8>,
     pub shantens: Vec<i8>,
+    pub seat_decision_idx: Vec<u32>,
+    pub at_kan_select: Vec<bool>,
 
     // per game
     pub grp: Grp, // actually per kyoku though
     pub player_id: u8,
     pub player_name: String,
+}
+
+#[pyclass]
+#[derive(Clone, Default)]
+pub struct TableAlignedStep {
+    #[pyo3(get)]
+    pub game_id: String,
+    #[pyo3(get)]
+    pub step_idx: u32,
+    #[pyo3(get)]
+    pub table_step_idx: u32,
+    #[pyo3(get)]
+    pub seat: u8,
+    #[pyo3(get)]
+    pub can_act: bool,
+
+    pub obs_private: Array2<f32>,
+    pub obs_oracle: Array2<f32>,
+    pub mask: Array1<bool>,
+
+    #[pyo3(get)]
+    pub action: i64,
+    #[pyo3(get)]
+    pub action_idx: i64,
+    #[pyo3(get)]
+    pub selected_logp: Option<f32>,
+    #[pyo3(get)]
+    pub reward: f32,
+    #[pyo3(get)]
+    pub done: bool,
+    #[pyo3(get)]
+    pub at_kyoku: u8,
+    pub final_reward_vec: [f32; 4],
+    #[pyo3(get)]
+    pub is_preterminal: bool,
 }
 
 struct LoaderContext<'a> {
@@ -69,6 +107,7 @@ struct LoaderContext<'a> {
 
     state: PlayerState,
     kyoku_idx: usize,
+    seat_decision_idx: u32,
 
     // fields below are only used for oracle
     opponent_states: [PlayerState; 3],
@@ -134,6 +173,14 @@ impl GameplayLoader {
         self.load_gz_log_files(gzip_filenames)
     }
 
+    #[pyo3(name = "load_gz_table_aligned_steps")]
+    fn load_gz_table_aligned_steps_py(
+        &self,
+        gzip_filenames: Vec<String>,
+    ) -> Result<Vec<Vec<TableAlignedStep>>> {
+        self.load_gz_table_aligned_steps(gzip_filenames)
+    }
+
     fn __repr__(&self) -> String {
         format!("{self:?}")
     }
@@ -158,6 +205,34 @@ impl GameplayLoader {
                 inner().with_context(|| format!("error when reading {filename}"))
             })
             .collect()
+    }
+
+    pub fn load_gz_table_aligned_steps<V, S>(
+        &self,
+        gzip_filenames: V,
+    ) -> Result<Vec<Vec<TableAlignedStep>>>
+    where
+        V: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let files = gzip_filenames
+            .into_iter()
+            .map(|f| f.as_ref().to_string())
+            .collect::<Vec<_>>();
+        let games_by_file = self.load_gz_log_files(files.clone())?;
+
+        let ret = games_by_file
+            .into_iter()
+            .enumerate()
+            .map(|(file_idx, games)| {
+                let file_name = Path::new(&files[file_idx])
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown");
+                gameplay_to_table_steps(file_name, games)
+            })
+            .collect();
+        Ok(ret)
     }
 
     pub fn load_events(&self, events: &[Event]) -> Result<Vec<Gameplay>> {
@@ -226,6 +301,12 @@ impl Gameplay {
     fn take_shantens(&mut self) -> Vec<i8> {
         mem::take(&mut self.shantens)
     }
+    fn take_seat_decision_idx(&mut self) -> Vec<u32> {
+        mem::take(&mut self.seat_decision_idx)
+    }
+    fn take_at_kan_select(&mut self) -> Vec<bool> {
+        mem::take(&mut self.at_kan_select)
+    }
 
     fn take_grp(&mut self) -> Grp {
         mem::take(&mut self.grp)
@@ -234,6 +315,71 @@ impl Gameplay {
     const fn take_player_id(&self) -> u8 {
         self.player_id
     }
+}
+
+#[pymethods]
+impl TableAlignedStep {
+    fn take_obs_private<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+        PyArray2::from_owned_array(py, mem::take(&mut self.obs_private))
+    }
+
+    fn take_obs_oracle<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
+        PyArray2::from_owned_array(py, mem::take(&mut self.obs_oracle))
+    }
+
+    fn take_mask<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyArray1<bool>> {
+        PyArray1::from_owned_array(py, mem::take(&mut self.mask))
+    }
+
+    fn take_final_reward_vec(&self) -> [f32; 4] {
+        self.final_reward_vec
+    }
+}
+
+fn gameplay_to_table_steps(file_name: &str, games: Vec<Gameplay>) -> Vec<TableAlignedStep> {
+    let mut out = vec![];
+    for (game_idx, game) in games.into_iter().enumerate() {
+        let steps = game.obs.len();
+        if steps == 0 {
+            continue;
+        }
+
+        let final_scores = game.grp.final_scores;
+        let mean = final_scores.iter().sum::<i32>() as f32 / 4.0;
+        let final_reward_vec = [
+            final_scores[0] as f32 - mean,
+            final_scores[1] as f32 - mean,
+            final_scores[2] as f32 - mean,
+            final_scores[3] as f32 - mean,
+        ];
+        let game_id = format!("{file_name}::{game_idx}");
+
+        for step_idx in 0..steps {
+            out.push(TableAlignedStep {
+                game_id: game_id.clone(),
+                step_idx: step_idx as u32,
+                table_step_idx: step_idx as u32,
+                seat: game.player_id,
+                can_act: true,
+                obs_private: game.obs[step_idx].clone(),
+                obs_oracle: game
+                    .invisible_obs
+                    .get(step_idx)
+                    .cloned()
+                    .unwrap_or_else(|| Array2::zeros((0, 34))),
+                mask: game.masks[step_idx].clone(),
+                action: game.actions[step_idx],
+                action_idx: game.actions[step_idx],
+                selected_logp: None,
+                reward: 0.0,
+                done: game.dones[step_idx],
+                at_kyoku: game.at_kyoku[step_idx],
+                final_reward_vec,
+                is_preterminal: step_idx + 1 == steps,
+            });
+        }
+    }
+    out
 }
 
 impl Gameplay {
@@ -256,6 +402,7 @@ impl Gameplay {
             invisibles,
             state: PlayerState::new(player_id),
             kyoku_idx: 0,
+            seat_decision_idx: 0,
             // end_state: EndState::Passive,
             opponent_states: array::from_fn(|i| PlayerState::new((player_id + i as u8 + 1) % 4)),
             from_rinshan: false,
@@ -285,6 +432,7 @@ impl Gameplay {
             invisibles,
             state,
             kyoku_idx,
+            seat_decision_idx,
             opponent_states,
             from_rinshan,
             yama_idx,
@@ -336,6 +484,8 @@ impl Gameplay {
         if !cans.can_act() {
             return Ok(());
         }
+        let decision_idx = *seat_decision_idx;
+        *seat_decision_idx += 1;
 
         let mut kan_select = None;
         let label_opt = match *next {
@@ -411,15 +561,21 @@ impl Gameplay {
         };
 
         if let Some(label) = label_opt {
-            self.add_entry(ctx, false, label);
+            self.add_entry(ctx, decision_idx, false, label);
             if let Some(kan) = kan_select {
-                self.add_entry(ctx, true, kan);
+                self.add_entry(ctx, decision_idx, true, kan);
             }
         }
         Ok(())
     }
 
-    fn add_entry(&mut self, ctx: &LoaderContext<'_>, at_kan_select: bool, label: usize) {
+    fn add_entry(
+        &mut self,
+        ctx: &LoaderContext<'_>,
+        decision_idx: u32,
+        at_kan_select: bool,
+        label: usize,
+    ) {
         let (feature, mask) = ctx.state.encode_obs(ctx.config.version, at_kan_select);
         self.obs.push(feature);
         self.actions.push(label as i64);
@@ -429,6 +585,8 @@ impl Gameplay {
         self.apply_gamma.push(label <= 37);
         self.at_turns.push(ctx.state.at_turn());
         self.shantens.push(ctx.state.shanten());
+        self.seat_decision_idx.push(decision_idx);
+        self.at_kan_select.push(at_kan_select);
 
         if let Some(invisibles) = ctx.invisibles {
             let invisible_obs = invisibles[ctx.kyoku_idx].encode(

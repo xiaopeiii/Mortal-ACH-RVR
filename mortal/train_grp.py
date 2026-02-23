@@ -71,12 +71,11 @@ def collate(batch):
         lengths.append(len(inputs_seq))
         rank_by_players.append(rank_by_player)
 
-    lengths = torch.tensor(lengths)
-    rank_by_players = torch.tensor(rank_by_players, dtype=torch.int64, pin_memory=True)
+    lengths = torch.tensor(lengths, dtype=torch.int64)
+    rank_by_players = torch.tensor(rank_by_players, dtype=torch.int64)
 
     padded = pad_sequence(inputs, batch_first=True)
     packed_inputs = pack_padded_sequence(padded, lengths, batch_first=True, enforce_sorted=False)
-    packed_inputs.pin_memory()
 
     return packed_inputs, rank_by_players
 
@@ -85,6 +84,7 @@ def train():
     batch_size = cfg['control']['batch_size']
     save_every = cfg['control']['save_every']
     val_steps = cfg['control']['val_steps']
+    num_workers = max(0, int(cfg['dataset'].get('num_workers', 1)))
 
     device = torch.device(cfg['control']['device'])
     torch.backends.cudnn.benchmark = cfg['control']['enable_cudnn_benchmark']
@@ -139,7 +139,7 @@ def train():
         dataset = train_file_data,
         batch_size = batch_size,
         drop_last = True,
-        num_workers = 1,
+        num_workers = num_workers,
         collate_fn = collate,
     ))
 
@@ -152,7 +152,7 @@ def train():
         dataset = val_file_data,
         batch_size = batch_size,
         drop_last = True,
-        num_workers = 1,
+        num_workers = num_workers,
         collate_fn = collate,
     ))
 

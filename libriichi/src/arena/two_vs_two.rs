@@ -215,11 +215,20 @@ impl TwoVsTwo {
                     let filename: PathBuf = [dir, &format!("{seed}_{key}_{split_name}.json.gz")]
                         .iter()
                         .collect();
+                    let trace_filename: PathBuf =
+                        [dir, &format!("{seed}_{key}_{split_name}.trace.jsonl.gz")]
+                            .iter()
+                            .collect();
 
                     let log = game_result.dump_json_log()?;
                     let mut comp = GzEncoder::new(log.as_bytes(), Compression::best());
                     let mut f = File::create(filename)?;
                     io::copy(&mut comp, &mut f)?;
+
+                    let trace = game_result.dump_reaction_trace_jsonl()?;
+                    let mut trace_comp = GzEncoder::new(trace.as_bytes(), Compression::best());
+                    let mut trace_f = File::create(trace_filename)?;
+                    io::copy(&mut trace_comp, &mut trace_f)?;
 
                     anyhow::Ok(())
                 })?;
@@ -309,11 +318,19 @@ impl TwoVsTwo {
             let filename: PathBuf = [dir, &format!("{seed}_{key}_{split_name}.json.gz")]
                 .iter()
                 .collect();
+            let trace_filename: PathBuf = [dir, &format!("{seed}_{key}_{split_name}.trace.jsonl.gz")]
+                .iter()
+                .collect();
 
             let log = results[0].dump_json_log()?;
             let mut comp = GzEncoder::new(log.as_bytes(), Compression::best());
             let mut f = File::create(filename)?;
             io::copy(&mut comp, &mut f)?;
+
+            let trace = results[0].dump_reaction_trace_jsonl()?;
+            let mut trace_comp = GzEncoder::new(trace.as_bytes(), Compression::best());
+            let mut trace_f = File::create(trace_filename)?;
+            io::copy(&mut trace_comp, &mut trace_f)?;
         }
 
         Ok(results.into_iter().next().unwrap())

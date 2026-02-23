@@ -7,8 +7,23 @@ __pycache__
 *.exe
 *.so
 *.pth
+*.pt
+*.onnx
 
 .ipynb_checkpoints
 *.ipynb
 
 /_draft
+
+# local training/runtime artifacts
+output/
+logs/
+**/__pycache__/
+*.log
+*.tmp
+*.cache
+.DS_Store
+Thumbs.db
+.idea/
+.venv/
+venv/

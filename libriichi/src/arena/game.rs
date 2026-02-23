@@ -1,5 +1,5 @@
 use super::board::{Board, BoardState, Poll};
-use super::result::GameResult;
+use super::result::{GameResult, ReactionTrace};
 use crate::agent::BatchAgent;
 use crate::mjai::EventExt;
 use std::time::Duration;
@@ -41,6 +41,9 @@ struct Game {
     kyotaku: u8,
     scores: [i32; 4],
     game_log: Vec<Vec<EventExt>>,
+    reaction_trace: Vec<ReactionTrace>,
+    table_step_idx: u32,
+    seat_decision_idx: [u32; 4],
 
     kyoku_started: bool,
     ended: bool,
@@ -189,6 +192,7 @@ impl Game {
                 scores: self.scores,
                 seed: self.seed,
                 game_log: mem::take(&mut self.game_log),
+                reaction_trace: mem::take(&mut self.reaction_trace),
             };
 
             for idx in &self.indexes {
@@ -198,10 +202,12 @@ impl Game {
         }
 
         let ctx = self.board.agent_context();
+        let mut has_any_can_act = false;
         for (player_id, state) in ctx.player_states.iter().enumerate() {
             if !state.last_cans().can_act() {
                 continue;
             }
+            has_any_can_act = true;
 
             let invisible_state = self.invisible_state_cache[player_id].take();
 
@@ -212,6 +218,42 @@ impl Game {
                 state,
                 invisible_state,
             )?;
+        }
+
+        if has_any_can_act {
+            for (player_id, state) in ctx.player_states.iter().enumerate() {
+                let can_act = state.last_cans().can_act();
+                let mut row = ReactionTrace {
+                    table_step_idx: self.table_step_idx,
+                    seat: player_id as u8,
+                    can_act,
+                    seat_decision_idx: self.seat_decision_idx[player_id],
+                    action_idx: None,
+                    selected_logp: None,
+                    selected_value: None,
+                    kan_action_idx: None,
+                    kan_selected_logp: None,
+                    kan_selected_value: None,
+                    decision_head: None,
+                };
+
+                if can_act {
+                    if let Some(meta) = self.last_reactions[player_id].meta.as_ref() {
+                        row.action_idx = meta.action_idx;
+                        row.selected_logp = meta.selected_logp;
+                        row.selected_value = meta.selected_value;
+                        if let Some(kan_meta) = meta.kan_select.as_ref() {
+                            row.kan_action_idx = kan_meta.action_idx;
+                            row.kan_selected_logp = kan_meta.selected_logp;
+                            row.kan_selected_value = kan_meta.selected_value;
+                        }
+                        row.decision_head = meta.decision_head.clone();
+                    }
+                    self.seat_decision_idx[player_id] += 1;
+                }
+                self.reaction_trace.push(row);
+            }
+            self.table_step_idx += 1;
         }
 
         Ok(None)

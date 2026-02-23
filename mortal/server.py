@@ -5,6 +5,8 @@ import shutil
 import torch
 import sys
 import os
+import json
+import time
 from os import path
 from io import BytesIO
 from typing import *
@@ -21,14 +23,18 @@ class State:
     drain_dir: str
     capacity: int
     force_sequential: bool
+    require_policy: bool
+    strict_require_trace: bool
     dir_lock: Lock
     param_lock: Lock
     # fields below are protected by dir_lock
     buffer_size: int
     submission_id: int
+    manifest_rows: list[dict]
     # fields below are protected by param_lock
     mortal_param: Optional[OrderedDict]
     dqn_param: Optional[OrderedDict]
+    policy_param: Optional[OrderedDict]
     param_version: int
     idle_param_version: int
 S = None
@@ -52,7 +58,10 @@ class Handler(BaseRequestHandler):
         with S.dir_lock:
             overflow = S.buffer_size >= S.capacity
             with S.param_lock:
-                has_param = S.mortal_param is not None and S.dqn_param is not None
+                has_param = (
+                    S.mortal_param is not None
+                    and (not S.require_policy or S.policy_param is not None)
+                )
         if overflow:
             self.send_msg({'status': 'samples overflow'})
             return
@@ -69,18 +78,46 @@ class Handler(BaseRequestHandler):
                 res = {
                     'status': 'ok',
                     'mortal': S.mortal_param,
-                    'dqn': S.dqn_param,
                     'param_version': S.param_version,
                 }
+                if S.dqn_param is not None:
+                    res['dqn'] = S.dqn_param
+                if S.policy_param is not None:
+                    res['policy'] = S.policy_param
             torch.save(res, buf)
         self.send_msg(buf.getbuffer(), packed=True)
 
     def handle_submit_replay(self, msg):
         with S.dir_lock:
+            if S.strict_require_trace:
+                names = set(msg['logs'].keys())
+                for filename in list(names):
+                    if not filename.endswith('.json.gz'):
+                        continue
+                    trace_name = f"{filename[:-8]}.trace.jsonl.gz"
+                    if trace_name not in names:
+                        raise RuntimeError(
+                            f"strict mode requires trace sidecar, missing {trace_name} for {filename}"
+                        )
+            param_version = int(msg.get('param_version', -1))
+            opponent_id = str(msg.get('opponent_id', ''))
+            profile = str(msg.get('profile', 'default'))
+            client_id = str(msg.get('client_id', ''))
+            submit_ts = time.time()
             for filename, content in msg['logs'].items():
-                filepath = path.join(S.buffer_dir, f'{S.submission_id}_{filename}')
+                saved_name = f'{S.submission_id}_{filename}'
+                filepath = path.join(S.buffer_dir, saved_name)
                 with open(filepath, 'wb') as f:
                     f.write(content)
+                S.manifest_rows.append({
+                    'file': saved_name,
+                    'param_version': param_version,
+                    'opponent_id': opponent_id,
+                    'profile': profile,
+                    'client_id': client_id,
+                    'submission_id': S.submission_id,
+                    'timestamp': submit_ts,
+                })
             S.buffer_size += len(msg['logs'])
             S.submission_id += 1
             logging.info(f'total buffer size: {S.buffer_size}')
@@ -88,13 +125,18 @@ class Handler(BaseRequestHandler):
     def handle_submit_param(self, msg):
         with S.param_lock:
             S.mortal_param = msg['mortal']
-            S.dqn_param = msg['dqn']
+            S.dqn_param = msg.get('dqn')
+            if 'policy' in msg:
+                S.policy_param = msg['policy']
+            elif S.require_policy:
+                S.policy_param = None
             S.param_version += 1
             if msg['is_idle']:
                 S.idle_param_version = S.param_version
 
     def handle_drain(self):
         drained_size = 0
+        manifest_path = None
         with S.dir_lock:
             buffer_list = os.listdir(S.buffer_dir)
             raw_count = len(buffer_list)
@@ -108,6 +150,12 @@ class Handler(BaseRequestHandler):
                     src = path.join(S.buffer_dir, filename)
                     dst = path.join(S.drain_dir, filename)
                     shutil.move(src, dst)
+                manifest_path = path.join(S.drain_dir, 'manifest.jsonl')
+                with open(manifest_path, 'w', encoding='utf-8') as f:
+                    for row in S.manifest_rows:
+                        f.write(json.dumps(row, ensure_ascii=False))
+                        f.write('\n')
+                S.manifest_rows = []
                 drained_size = raw_count
                 S.buffer_size = 0
                 logging.info(f'files transferred to trainer: {drained_size}')
@@ -115,6 +163,7 @@ class Handler(BaseRequestHandler):
         self.send_msg({
             'count': drained_size,
             'drain_dir': S.drain_dir,
+            'manifest': manifest_path,
         })
 
     def send_msg(self, msg, packed=False):
@@ -133,17 +182,25 @@ class Server(ThreadingTCPServer):
 def main():
     global S
     cfg = config['online']['server']
+    online_policy = config.get('online_policy', {})
+    control_decision_head = config.get('control', {}).get('decision_head', 'value')
+    strict_cfg = config.get('strict', {})
+    strict_enabled = bool(strict_cfg.get('enabled', False))
     S = State(
         buffer_dir = path.abspath(cfg['buffer_dir']),
         drain_dir = path.abspath(cfg['drain_dir']),
         capacity = cfg['capacity'],
         force_sequential = cfg['force_sequential'],
+        require_policy = bool(online_policy.get('enabled', False) or control_decision_head == 'policy'),
+        strict_require_trace = bool(strict_enabled and strict_cfg.get('require_trace', True)),
         dir_lock = Lock(),
         param_lock = Lock(),
         buffer_size = 0,
         submission_id = 0,
+        manifest_rows = [],
         mortal_param = None,
         dqn_param = None,
+        policy_param = None,
         param_version = 0,
         idle_param_version = 0,
     )

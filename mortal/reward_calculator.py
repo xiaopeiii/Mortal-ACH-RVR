@@ -4,13 +4,15 @@ import numpy as np
 class RewardCalculator:
     def __init__(self, grp=None, pts=None, uniform_init=False):
         self.device = torch.device('cpu')
-        self.grp = grp.to(self.device).eval()
+        self.grp = None if grp is None else grp.to(self.device).eval()
         self.uniform_init = uniform_init
 
         pts = pts or [3, 1, -1, -3]
         self.pts = torch.tensor(pts, dtype=torch.float64, device=self.device)
 
     def calc_grp(self, grp_feature):
+        if self.grp is None:
+            raise RuntimeError('calc_grp requires a GRP model, but grp is None')
         seq = list(map(
             lambda idx: torch.as_tensor(grp_feature[:idx+1], device=self.device),
             range(len(grp_feature)),

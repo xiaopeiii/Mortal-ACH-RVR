@@ -2,10 +2,10 @@ import random
 import torch
 import numpy as np
 from torch.utils.data import IterableDataset
-from model import GRP
 from reward_calculator import RewardCalculator
 from libriichi.dataset import GameplayLoader
 from config import config
+from grp_loader import load_grp_from_cfg
 
 class FileDatasetsIter(IterableDataset):
     def __init__(
@@ -38,9 +38,7 @@ class FileDatasetsIter(IterableDataset):
 
     def build_iter(self):
         # do not put it in __init__, it won't work on Windows
-        self.grp = GRP(**config['grp']['network'])
-        grp_state = torch.load(config['grp']['state_file'], weights_only=True, map_location=torch.device('cpu'))
-        self.grp.load_state_dict(grp_state['model'])
+        self.grp, _ = load_grp_from_cfg(config['grp'], map_location=torch.device('cpu'))
         self.reward_calc = RewardCalculator(self.grp, self.pts)
 
         for _ in range(self.num_epochs):

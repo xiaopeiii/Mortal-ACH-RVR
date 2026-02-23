@@ -230,6 +230,29 @@ class DQN(nn.Module):
         q = (v + a - a_mean).masked_fill(~mask, -torch.inf)
         return q
 
+class PolicyHead(nn.Module):
+    def __init__(self, *, version=1):
+        super().__init__()
+        self.version = version
+        match version:
+            case 1:
+                self.net = nn.Linear(512, ACTION_SPACE)
+            case 2 | 3:
+                hidden_size = 512 if version == 2 else 256
+                self.net = nn.Sequential(
+                    nn.Linear(1024, hidden_size),
+                    nn.Mish(inplace=True),
+                    nn.Linear(hidden_size, ACTION_SPACE),
+                )
+            case 4:
+                self.net = nn.Linear(1024, ACTION_SPACE)
+                nn.init.constant_(self.net.bias, 0)
+            case _:
+                raise ValueError(f'Unexpected version {self.version}')
+
+    def forward(self, phi):
+        return self.net(phi)
+
 class GRP(nn.Module):
     def __init__(self, hidden_size=64, num_layers=2):
         super().__init__()

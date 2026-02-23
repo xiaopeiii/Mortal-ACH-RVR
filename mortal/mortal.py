@@ -5,12 +5,13 @@ import sys
 import json
 import torch
 from datetime import datetime, timezone
-from model import Brain, DQN, GRP
+from model import Brain, DQN, PolicyHead
 from engine import MortalEngine
 from common import filtered_trimmed_lines
 from libriichi.mjai import Bot
 from libriichi.dataset import Grp
 from config import config
+from grp_loader import load_grp_from_cfg
 
 USAGE = '''Usage: python mortal.py <ID>
 
@@ -39,13 +40,26 @@ def main():
         tag = f'mortal{version}-b{num_blocks}c{conv_channels}-t{time}'
 
     mortal = Brain(version=version, num_blocks=num_blocks, conv_channels=conv_channels).eval()
-    dqn = DQN(version=version).eval()
+    dqn = None
+    decision_head = config['control'].get('decision_head', 'value')
+    policy = None
     mortal.load_state_dict(state['mortal'])
-    dqn.load_state_dict(state['current_dqn'])
+    if 'current_dqn' in state:
+        dqn = DQN(version=version).eval()
+        dqn.load_state_dict(state['current_dqn'])
+    if decision_head == 'policy':
+        policy_state = state.get('policy')
+        if policy_state is None:
+            raise KeyError('control.decision_head=policy but checkpoint has no `policy` state')
+        policy = PolicyHead(version=version).eval()
+        policy.load_state_dict(policy_state)
+    elif dqn is None:
+        raise KeyError('control.decision_head=value but checkpoint has no `current_dqn` state')
 
     engine = MortalEngine(
         mortal,
         dqn,
+        policy = policy,
         version = version,
         is_oracle = False,
         device = device,
@@ -53,6 +67,10 @@ def main():
         enable_quick_eval = not review_mode,
         enable_rule_based_agari_guard = True,
         name = 'mortal',
+        decision_head = decision_head,
+        policy_temp = config['control'].get('policy_temp', 1.0),
+        policy_top_p = config['control'].get('policy_top_p', 1.0),
+        policy_epsilon = config['control'].get('policy_epsilon', 0.0),
     )
     bot = Bot(engine, player_id)
 
@@ -68,9 +86,7 @@ def main():
             print('{"type":"none","meta":{"mask_bits":0}}', flush=True)
 
     if review_mode:
-        grp = GRP(**config['grp']['network'])
-        grp_state = torch.load(config['grp']['state_file'], weights_only=True, map_location=torch.device('cpu'))
-        grp.load_state_dict(grp_state['model'])
+        grp, _ = load_grp_from_cfg(config['grp'], map_location=torch.device('cpu'))
 
         ins = Grp.load_log('\n'.join(logs))
         feature = ins.take_feature()

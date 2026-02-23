@@ -2,6 +2,7 @@ use crate::mjai::{Event, EventExt};
 use crate::rankings::Rankings;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json as json;
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,22 @@ pub struct GameResult {
     pub scores: [i32; 4],
     pub seed: (u64, u64),
     pub game_log: Vec<Vec<EventExt>>,
+    pub reaction_trace: Vec<ReactionTrace>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReactionTrace {
+    pub table_step_idx: u32,
+    pub seat: u8,
+    pub can_act: bool,
+    pub seat_decision_idx: u32,
+    pub action_idx: Option<i64>,
+    pub selected_logp: Option<f32>,
+    pub selected_value: Option<f32>,
+    pub kan_action_idx: Option<i64>,
+    pub kan_selected_logp: Option<f32>,
+    pub kan_selected_value: Option<f32>,
+    pub decision_head: Option<String>,
 }
 
 impl GameResult {
@@ -47,6 +64,15 @@ impl GameResult {
         json::to_writer(&mut v, &Event::EndGame)?;
         v.push(b'\n');
 
+        Ok(String::from_utf8(v)?)
+    }
+
+    pub fn dump_reaction_trace_jsonl(&self) -> Result<String> {
+        let mut v = vec![];
+        for row in &self.reaction_trace {
+            json::to_writer(&mut v, row)?;
+            v.push(b'\n');
+        }
         Ok(String::from_utf8(v)?)
     }
 }

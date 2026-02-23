@@ -19,6 +19,7 @@ pub struct MortalBatchAgent {
     engine: PyObject,
     is_oracle: bool,
     version: u32,
+    decision_head: String,
     enable_quick_eval: bool,
     enable_rule_based_agari_guard: bool,
     name: String,
@@ -28,6 +29,8 @@ pub struct MortalBatchAgent {
     q_values: Vec<[f32; ACTION_SPACE]>,
     masks_recv: Vec<[bool; ACTION_SPACE]>,
     is_greedy: Vec<bool>,
+    selected_logps: Vec<f32>,
+    selected_values: Vec<f32>,
     last_eval_elapsed: Duration,
     last_batch_size: usize,
 
@@ -50,28 +53,40 @@ impl MortalBatchAgent {
     pub fn new(engine: PyObject, player_ids: &[u8]) -> Result<Self> {
         ensure!(player_ids.iter().all(|&id| matches!(id, 0..=3)));
 
-        let (name, is_oracle, version, enable_quick_eval, enable_rule_based_agari_guard) =
-            Python::with_gil(|py| {
-                let obj = engine.bind_borrowed(py);
-                ensure!(
-                    obj.getattr("react_batch")?.is_callable(),
-                    "missing method react_batch",
-                );
+        let (
+            name,
+            is_oracle,
+            version,
+            decision_head,
+            enable_quick_eval,
+            enable_rule_based_agari_guard,
+        ) = Python::with_gil(|py| -> Result<(String, bool, u32, String, bool, bool)> {
+            let obj = engine.bind_borrowed(py);
+            ensure!(
+                obj.getattr("react_batch")?.is_callable(),
+                "missing method react_batch",
+            );
 
-                let name = obj.getattr("name")?.extract()?;
-                let is_oracle = obj.getattr("is_oracle")?.extract()?;
-                let version = obj.getattr("version")?.extract()?;
-                let enable_quick_eval = obj.getattr("enable_quick_eval")?.extract()?;
-                let enable_rule_based_agari_guard =
-                    obj.getattr("enable_rule_based_agari_guard")?.extract()?;
-                Ok((
-                    name,
-                    is_oracle,
-                    version,
-                    enable_quick_eval,
-                    enable_rule_based_agari_guard,
-                ))
-            })?;
+            let name = obj.getattr("name")?.extract()?;
+            let is_oracle = obj.getattr("is_oracle")?.extract()?;
+            let version = obj.getattr("version")?.extract()?;
+            let decision_head = obj
+                .getattr("decision_head")
+                .ok()
+                .and_then(|x| x.extract().ok())
+                .unwrap_or_else(|| "value".to_owned());
+            let enable_quick_eval = obj.getattr("enable_quick_eval")?.extract()?;
+            let enable_rule_based_agari_guard =
+                obj.getattr("enable_rule_based_agari_guard")?.extract()?;
+            Ok((
+                name,
+                is_oracle,
+                version,
+                decision_head,
+                enable_quick_eval,
+                enable_rule_based_agari_guard,
+            ))
+        })?;
 
         let size = player_ids.len();
         let quick_eval_reactions = if enable_quick_eval {
@@ -91,6 +106,7 @@ impl MortalBatchAgent {
             engine,
             is_oracle,
             version,
+            decision_head,
             enable_quick_eval,
             enable_rule_based_agari_guard,
             name,
@@ -100,6 +116,8 @@ impl MortalBatchAgent {
             q_values: vec![],
             masks_recv: vec![],
             is_greedy: vec![],
+            selected_logps: vec![],
+            selected_values: vec![],
             last_eval_elapsed: Duration::ZERO,
             last_batch_size: 0,
 
@@ -123,7 +141,22 @@ impl MortalBatchAgent {
         let start = Instant::now();
         self.last_batch_size = sync_fields.states.len();
 
-        (self.actions, self.q_values, self.masks_recv, self.is_greedy) = Python::with_gil(|py| {
+        (
+            self.actions,
+            self.q_values,
+            self.masks_recv,
+            self.is_greedy,
+            self.selected_logps,
+            self.selected_values,
+        ) = Python::with_gil(
+            |py| -> Result<(
+                Vec<usize>,
+                Vec<[f32; ACTION_SPACE]>,
+                Vec<[bool; ACTION_SPACE]>,
+                Vec<bool>,
+                Vec<f32>,
+                Vec<f32>,
+            )> {
             let states: Vec<_> = sync_fields
                 .states
                 .drain(..)
@@ -143,13 +176,46 @@ impl MortalBatchAgent {
             });
 
             let args = (states, masks, invisible_states);
-            self.engine
+            let out = self
+                .engine
                 .bind_borrowed(py)
                 .call_method1(intern!(py, "react_batch"), args)
-                .context("failed to execute `react_batch` on Python engine")?
-                .extract()
-                .context("failed to extract to Rust type")
-        })?;
+                .context("failed to execute `react_batch` on Python engine")?;
+
+            // Backward-compatible extraction:
+            // - New engine: returns 6-tuple (actions, logits/q, masks, is_greedy, selected_logp, selected_value)
+            // - Legacy engine: returns 4-tuple (actions, logits/q, masks, is_greedy)
+            let parsed = if let Ok(v6) = out.extract::<(
+                Vec<usize>,
+                Vec<[f32; ACTION_SPACE]>,
+                Vec<[bool; ACTION_SPACE]>,
+                Vec<bool>,
+                Vec<f32>,
+                Vec<f32>,
+            )>() {
+                v6
+            } else {
+                let (actions, q_values, masks_recv, is_greedy) = out
+                    .extract::<(
+                        Vec<usize>,
+                        Vec<[f32; ACTION_SPACE]>,
+                        Vec<[bool; ACTION_SPACE]>,
+                        Vec<bool>,
+                    )>()
+                    .context("failed to extract to Rust type")?;
+                let n = actions.len();
+                (
+                    actions,
+                    q_values,
+                    masks_recv,
+                    is_greedy,
+                    vec![f32::NAN; n],
+                    vec![f32::NAN; n],
+                )
+            };
+                Ok(parsed)
+            },
+        )?;
 
         self.last_eval_elapsed = Instant::now()
             .checked_duration_since(start)
@@ -164,7 +230,7 @@ impl MortalBatchAgent {
         let is_greedy = self.is_greedy[action_idx];
 
         let mut mask_bits = 0;
-        let q_values_compact = q_values
+        let q_values_compact: Vec<f32> = q_values
             .into_iter()
             .zip(masks)
             .enumerate()
@@ -176,9 +242,14 @@ impl MortalBatchAgent {
             .collect();
 
         Metadata {
-            q_values: Some(q_values_compact),
+            q_values: Some(q_values_compact.clone()),
+            policy_logits_compact: (self.decision_head == "policy").then_some(q_values_compact),
             mask_bits: Some(mask_bits),
             is_greedy: Some(is_greedy),
+            action_idx: Some(self.actions[action_idx] as i64),
+            selected_logp: Some(self.selected_logps[action_idx]),
+            selected_value: Some(self.selected_values[action_idx]),
+            decision_head: Some(self.decision_head.clone()),
             shanten: Some(state.shanten()),
             at_furiten: Some(state.at_furiten()),
             ..Default::default()

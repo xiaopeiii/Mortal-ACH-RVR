@@ -20,6 +20,10 @@ dummy.setflags(write=False)
 torch.as_tensor(dummy)
 
 # "distutils Version classes are deprecated"
-import torch.utils.tensorboard
+# TensorBoard is optional for inference/review-only environments.
+try:
+    import torch.utils.tensorboard
+except ModuleNotFoundError:
+    pass
 
 warnings.simplefilter('default')

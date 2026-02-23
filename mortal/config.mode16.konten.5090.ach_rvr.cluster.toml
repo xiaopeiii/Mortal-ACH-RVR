@@ -1,0 +1,131 @@
+[control]
+version = 4
+online = true
+decision_head = "policy"
+policy_temp = 1.0
+policy_top_p = 1.0
+policy_epsilon = 0.0
+state_file = "/root/Mahjong/output/checkpoints/mortal_mode16_konten_5090_ach_rvr_online.pth"
+best_state_file = "/root/Mahjong/output/checkpoints/mortal_mode16_konten_5090_ach_rvr_online_best.pth"
+bootstrap_state_file = "/root/Mahjong/output/checkpoints/mortal_mode16_konten_5090_ach_rvr.pth"
+tensorboard_dir = "/root/Mahjong/output/tensorboard/mortal_mode16_konten_5090_ach_rvr_online"
+device = "cuda:0"
+enable_cudnn_benchmark = true
+enable_amp = true
+enable_compile = false
+batch_size = 512
+opt_step_every = 1
+save_every = 2000
+submit_every = 500
+online_round_steps = 2000
+
+[dataset]
+globs = []
+file_index = "/root/Mahjong/output/unused_file_index_for_online_ach_rvr.pth"
+file_batch_size = 48
+reserve_ratio = 0.0
+num_workers = 8
+num_epochs = 1
+enable_augmentation = false
+augmented_first = false
+
+[env]
+gamma = 1.0
+pts = [ 1.35, 0.6, -0.05, -2.2,]
+
+[resnet]
+conv_channels = 256
+num_blocks = 54
+
+[optim]
+eps = 1e-8
+betas = [ 0.9, 0.999,]
+weight_decay = 0.05
+max_grad_norm = 0.5
+
+[optim.scheduler]
+peak = 3e-5
+final = 3e-6
+warm_up_steps = 2000
+max_steps = 1000000
+
+[ach]
+eta = 1.0
+imp_clip = 0.15
+logit_clip = 8.0
+entropy_coef = 0.003
+value_coef = 0.3
+gamma = 1.0
+gae_lambda = 0.95
+old_sync_every = 500
+adv_norm = true
+train_brain = true
+freeze_private_brain = false
+freeze_value_head = false
+
+[rvr]
+enabled = true
+use_oracle_value = false
+use_expected_reward = false
+zero_sum_coef = 0.05
+rv_coef = 0.5
+ern_coef = 0.5
+reward_blend_alpha = 0.0
+ern_preterminal_only = true
+reward_source = "grp_plus_ern"
+
+[league]
+enabled = true
+pool_size = 24
+p_best = 0.35
+p_latest = 0.25
+p_history = 0.40
+refresh_every = 1000
+min_eval_games = 4000
+
+[oracle_dataset]
+enabled = true
+aligned_table_steps = true
+include_invisible_obs = true
+include_terminal_context = true
+
+[grp]
+state_file = "/root/Mahjong/output/checkpoints/grp_mode16_konten_5090_super.pth"
+
+[online]
+history_window = 20
+enable_compile = false
+
+[online.remote]
+host = "0.0.0.0"
+port = 5000
+
+[online.server]
+buffer_dir = "/root/Mahjong/output/online_buffer_ach_rvr_5090_cluster"
+drain_dir = "/root/Mahjong/output/online_drain_ach_rvr_5090_cluster"
+capacity = 12000
+force_sequential = true
+
+[train_play.default]
+games = 3000
+log_dir = "/tmp/train_play_mode16_konten_ach_rvr_cluster"
+boltzmann_epsilon = 0.0
+boltzmann_temp = 1.0
+top_p = 1.0
+decision_head = "policy"
+policy_temp = 1.0
+policy_top_p = 1.0
+policy_epsilon = 0.0
+repeats = 1
+
+[baseline.train]
+device = "cuda:0"
+enable_compile = false
+state_file = "/root/Mahjong/output/checkpoints/mortal_mode16_konten_5090_super_best.pth"
+decision_head = "value"
+
+[baseline.test]
+device = "cuda:0"
+enable_compile = false
+state_file = "/root/Mahjong/output/checkpoints/mortal_mode16_konten_5090_super_best.pth"
+decision_head = "value"
