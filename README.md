@@ -1,7 +1,5 @@
 ﻿# Mortal - Feature Update Summary
 
-English is the primary language in this README. Chinese summary is included below.
-
 ## Overview
 This repository provides a focused summary of recent Mortal-side feature work.
 The update direction is centered on ACH + RVR training and stricter data alignment.
@@ -32,16 +30,6 @@ The update direction is centered on ACH + RVR training and stricter data alignme
 - Original Mortal project author: Equim-chan
 - Upstream source: https://github.com/Equim-chan/Mortal
 
-## 中文摘要（辅）
-1. 主要改动方向是 ACH+RVR 三阶段训练链路。
-2. 加入 strict 对齐审计，训练前先做 trace/old_logp 质量检查。
-3. 统一策略头、价值头、相对价值头、期望奖励网络的联合优化。
-4. 补充可复现评测脚本和分阶段实验流程。
-
-## Sensitive Data Notice
-No personal secrets, local absolute paths, tokens, or private runtime logs are included in this repository.
-
-
 <!--
 Original upstream README is commented out below for reference.
 
@@ -57,8 +45,6 @@ Original upstream README is commented out below for reference.
 ![Lines of code](https://www.aschey.tech/tokei/github/Equim-chan/Mortal)
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/Equim-chan/Mortal)
 [![license](https://img.shields.io/github/license/Equim-chan/Mortal)](https://github.com/Equim-chan/Mortal/blob/main/LICENSE)
-
-[![Donate](https://img.shields.io/badge/Donate-%E2%9D%A4%EF%B8%8F-blue?style=social)](https://mortal.ekyu.moe/donate.html)
 
 Mortal ([鍑″か](https://www.mdbg.net/chinese/dictionary?wdqb=%E5%87%A1%E5%A4%AB)) is a free and open source AI for Japanese mahjong, powered by deep reinforcement learning.
 
